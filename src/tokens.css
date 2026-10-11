@@ -1,0 +1,8 @@
+:root {
+  --black: #050607;
+  --white: #f4f5f4;
+  --accent: #c5dfc8;
+  --line: #ffffff1a;
+  --gutter: 40px;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
