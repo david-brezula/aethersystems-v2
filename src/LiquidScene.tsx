@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { LiquidWake, liquidPoint, WAKE_COUNT, WAKE_LIFETIME } from "./liquidWake";
 
 const fragment = `
   precision highp float;
   uniform vec2 uResolution;
   uniform float uTime;
-  uniform vec2 uPointer;
+  uniform vec4 uWake[${WAKE_COUNT}];
+  uniform float uAge[${WAKE_COUNT}];
   varying vec2 vUv;
   vec3 mod289(vec3 x) { return x-floor(x*(1.0/289.0))*289.0; }
   vec2 mod289(vec2 x) { return x-floor(x*(1.0/289.0))*289.0; }
@@ -35,7 +37,20 @@ const fragment = `
   void main() {
     vec2 uv=vUv;
     vec2 p=(uv-.5)*vec2(uResolution.x/uResolution.y,1.)*3.3;
-    p+=uPointer*.07;
+    vec2 displacement=vec2(0.);
+    for(int i=0;i<${WAKE_COUNT};i++) {
+      vec2 stroke=uWake[i].zw;
+      float age=uAge[i];
+      float along=clamp(dot(p-uWake[i].xy,stroke)/max(dot(stroke,stroke),.00001),0.,1.);
+      vec2 delta=p-(uWake[i].xy+stroke*along);
+      float radius=.18+age*.075;
+      float influence=exp(-dot(delta,delta)/(radius*radius));
+      float life=exp(-age*1.5)*(1.-exp(-age*28.))*(1.-smoothstep(1.6,${WAKE_LIFETIME.toFixed(1)},age));
+      vec2 drag=stroke*2.8/(1.+length(stroke)*5.);
+      float curl=(delta.x*stroke.y-delta.y*stroke.x)/(radius*radius);
+      displacement+=(drag+vec2(-delta.y,delta.x)*curl*1.8)*influence*life;
+    }
+    p-=displacement;
     float f=field(p);
     float e=.008;
     vec3 n=normalize(vec3((field(p+vec2(e,0.))-f)/e,(field(p+vec2(0.,e))-f)/e,1.7));
@@ -75,10 +90,12 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
     container.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const wake = new LiquidWake();
     const uniforms = {
       uTime: { value: 18 },
       uResolution: { value: new THREE.Vector2() },
-      uPointer: { value: new THREE.Vector2() },
+      uWake: { value: wake.segments },
+      uAge: { value: wake.ages },
     };
     const material = new THREE.ShaderMaterial({
       uniforms,
@@ -91,8 +108,8 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
     let visible = true;
     let frame = 0;
     let last = 0;
-    const target = new THREE.Vector2();
     const resize = () => {
+      wake.clear();
       renderer.setSize(container.clientWidth, container.clientHeight);
       uniforms.uResolution.value.set(
         container.clientWidth,
@@ -100,27 +117,44 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
       );
       renderer.render(scene, camera);
     };
-    const pointer = (event: PointerEvent) =>
-      target.set(
-        event.clientX / window.innerWidth - 0.5,
-        0.5 - event.clientY / window.innerHeight,
-      );
+    const pointer = (event: PointerEvent) => {
+      if (pausedRef.current || !visible || document.hidden || event.pointerType === "touch") {
+        wake.leave();
+        return;
+      }
+      const point = liquidPoint(event.clientX, event.clientY, container.getBoundingClientRect());
+      if (point) wake.move(point.x, point.y, event.timeStamp);
+      else wake.leave();
+    };
+    const leave = () => wake.leave();
+    const pointerOut = (event: PointerEvent) => {
+      if (!event.relatedTarget) leave();
+    };
+    const reset = () => wake.clear();
     const observer = new IntersectionObserver(([entry]) => {
       visible = entry.isIntersecting;
+      if (!visible) wake.clear();
     });
     observer.observe(container);
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(container);
     window.addEventListener("pointermove", pointer, { passive: true });
+    window.addEventListener("pointerout", pointerOut);
+    window.addEventListener("blur", reset);
+    window.addEventListener("scroll", leave, { passive: true });
+    document.addEventListener("visibilitychange", reset);
     // Limit the shader to 30 fps and suspend its work outside the viewport.
     const animate = (now: number) => {
       frame = requestAnimationFrame(animate);
       if (now - last < 32) return;
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
-      if (!visible || document.hidden || pausedRef.current) return;
+      if (!visible || document.hidden || pausedRef.current) {
+        wake.leave();
+        return;
+      }
       uniforms.uTime.value += dt;
-      uniforms.uPointer.value.lerp(target, 0.04);
+      wake.advance(dt);
       renderer.render(scene, camera);
     };
     resize();
@@ -130,6 +164,10 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
       observer.disconnect();
       resizeObserver.disconnect();
       window.removeEventListener("pointermove", pointer);
+      window.removeEventListener("pointerout", pointerOut);
+      window.removeEventListener("blur", reset);
+      window.removeEventListener("scroll", leave);
+      document.removeEventListener("visibilitychange", reset);
       geometry.dispose();
       material.dispose();
       renderer.dispose();
