@@ -42,6 +42,8 @@ const fragment = `
       texture2D(uWater,uv+vec2(uWaterTexel.x,0.)).r-texture2D(uWater,uv-vec2(uWaterTexel.x,0.)).r,
       texture2D(uWater,uv+vec2(0.,uWaterTexel.y)).r-texture2D(uWater,uv-vec2(0.,uWaterTexel.y)).r
     )/(2.*uWaterTexel*vec2(uResolution.x/uResolution.y,1.)*3.3);
+    // Visible refraction follows the outward wave slope, not the cursor's drag vector.
+    p-=waterSlope*.22/(1.+length(waterSlope)*.7);
     float f=field(p);
     float e=.008;
     vec2 baseSlope=vec2(field(p+vec2(e,0.))-f,field(p+vec2(0.,e))-f)/e;
