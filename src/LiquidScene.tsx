@@ -1,13 +1,14 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { LiquidWake, liquidPoint, WAKE_COUNT, WAKE_LIFETIME } from "./liquidWake";
+import { LiquidWake, liquidPoint } from "./liquidWake";
+import { createWaterSurface } from "./WaterSurface";
 
 const fragment = `
   precision highp float;
   uniform vec2 uResolution;
   uniform float uTime;
-  uniform vec4 uWake[${WAKE_COUNT}];
-  uniform float uAge[${WAKE_COUNT}];
+  uniform sampler2D uWater;
+  uniform vec2 uWaterTexel;
   varying vec2 vUv;
   vec3 mod289(vec3 x) { return x-floor(x*(1.0/289.0))*289.0; }
   vec2 mod289(vec2 x) { return x-floor(x*(1.0/289.0))*289.0; }
@@ -37,23 +38,14 @@ const fragment = `
   void main() {
     vec2 uv=vUv;
     vec2 p=(uv-.5)*vec2(uResolution.x/uResolution.y,1.)*3.3;
-    vec2 displacement=vec2(0.);
-    for(int i=0;i<${WAKE_COUNT};i++) {
-      vec2 stroke=uWake[i].zw;
-      float age=uAge[i];
-      float along=clamp(dot(p-uWake[i].xy,stroke)/max(dot(stroke,stroke),.00001),0.,1.);
-      vec2 delta=p-(uWake[i].xy+stroke*along);
-      float radius=.18+age*.075;
-      float influence=exp(-dot(delta,delta)/(radius*radius));
-      float life=exp(-age*1.5)*(1.-exp(-age*28.))*(1.-smoothstep(1.6,${WAKE_LIFETIME.toFixed(1)},age));
-      vec2 drag=stroke*2.8/(1.+length(stroke)*5.);
-      float curl=(delta.x*stroke.y-delta.y*stroke.x)/(radius*radius);
-      displacement+=(drag+vec2(-delta.y,delta.x)*curl*1.8)*influence*life;
-    }
-    p-=displacement;
+    vec2 waterSlope=vec2(
+      texture2D(uWater,uv+vec2(uWaterTexel.x,0.)).r-texture2D(uWater,uv-vec2(uWaterTexel.x,0.)).r,
+      texture2D(uWater,uv+vec2(0.,uWaterTexel.y)).r-texture2D(uWater,uv-vec2(0.,uWaterTexel.y)).r
+    )/(2.*uWaterTexel*vec2(uResolution.x/uResolution.y,1.)*3.3);
     float f=field(p);
     float e=.008;
-    vec3 n=normalize(vec3((field(p+vec2(e,0.))-f)/e,(field(p+vec2(0.,e))-f)/e,1.7));
+    vec2 baseSlope=vec2(field(p+vec2(e,0.))-f,field(p+vec2(0.,e))-f)/e;
+    vec3 n=normalize(vec3(baseSlope+waterSlope*3.5,1.7));
     vec3 light=normalize(vec3(-.6,.9,1.));
     float spec=pow(max(dot(reflect(-light,n),vec3(0.,0.,1.)),0.),13.);
     float ridge=pow(.5+.5*sin(f*12.+p.y*.7),8.);
@@ -91,11 +83,14 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
     const scene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     const wake = new LiquidWake();
+    const flatWater = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    flatWater.needsUpdate = true;
+    let water: ReturnType<typeof createWaterSurface> = null;
     const uniforms = {
       uTime: { value: 18 },
       uResolution: { value: new THREE.Vector2() },
-      uWake: { value: wake.segments },
-      uAge: { value: wake.ages },
+      uWater: { value: flatWater as THREE.Texture },
+      uWaterTexel: { value: new THREE.Vector2(1, 1) },
     };
     const material = new THREE.ShaderMaterial({
       uniforms,
@@ -109,7 +104,12 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
     let frame = 0;
     let last = 0;
     const resize = () => {
+      if (!container.clientWidth || !container.clientHeight) return;
       wake.clear();
+      water?.dispose();
+      water = createWaterSurface(renderer, container.clientWidth, container.clientHeight, wake);
+      uniforms.uWater.value = water?.texture ?? flatWater;
+      uniforms.uWaterTexel.value.copy(water?.texel ?? new THREE.Vector2(1, 1));
       renderer.setSize(container.clientWidth, container.clientHeight);
       uniforms.uResolution.value.set(
         container.clientWidth,
@@ -130,10 +130,13 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
     const pointerOut = (event: PointerEvent) => {
       if (!event.relatedTarget) leave();
     };
-    const reset = () => wake.clear();
+    const reset = () => {
+      wake.clear();
+      water?.reset();
+    };
     const observer = new IntersectionObserver(([entry]) => {
       visible = entry.isIntersecting;
-      if (!visible) wake.clear();
+      if (!visible) reset();
     });
     observer.observe(container);
     const resizeObserver = new ResizeObserver(resize);
@@ -154,7 +157,8 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
         return;
       }
       uniforms.uTime.value += dt;
-      wake.advance(dt);
+      water?.step(dt);
+      uniforms.uWater.value = water?.texture ?? flatWater;
       renderer.render(scene, camera);
     };
     resize();
@@ -170,6 +174,8 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
       document.removeEventListener("visibilitychange", reset);
       geometry.dispose();
       material.dispose();
+      water?.dispose();
+      flatWater.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };

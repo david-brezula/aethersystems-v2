@@ -1,5 +1,4 @@
 export const WAKE_COUNT = 12;
-export const WAKE_LIFETIME = 2.4;
 
 type Bounds = { left: number; top: number; width: number; height: number };
 
@@ -11,12 +10,11 @@ export function liquidPoint(clientX: number, clientY: number, rect: Bounds) {
   return { x: ((x - rect.width / 2) / rect.height) * 3.3, y: (0.5 - y / rect.height) * 3.3 };
 }
 
-// A bounded trail in shader coordinates, independent of event rate and aspect ratio.
+// Queue movement once; the GPU heightfield owns propagation and decay afterwards.
 export class LiquidWake {
   readonly segments = new Float32Array(WAKE_COUNT * 4);
-  readonly ages = new Float32Array(WAKE_COUNT).fill(WAKE_LIFETIME);
   private previous: { x: number; y: number; time: number } | null = null;
-  private next = 0;
+  private count = 0;
 
   move(x: number, y: number, time: number) {
     const previous = this.previous;
@@ -30,14 +28,17 @@ export class LiquidWake {
     this.previous = { x, y, time };
     const distance = Math.hypot(dx, dy);
     if (distance < 0.002 || distance > 0.8) return;
-    this.segments.set([previous.x, previous.y, dx, dy], this.next * 4);
-    this.ages[this.next] = 0;
-    this.next = (this.next + 1) % WAKE_COUNT;
+    if (this.count === WAKE_COUNT) {
+      this.segments.copyWithin(0, 4);
+      this.count--;
+    }
+    this.segments.set([previous.x, previous.y, dx, dy], this.count++ * 4);
   }
 
-  advance(dt: number) {
-    for (let i = 0; i < WAKE_COUNT; i++)
-      this.ages[i] = Math.min(WAKE_LIFETIME, this.ages[i] + dt);
+  consume() {
+    const count = this.count;
+    this.count = 0;
+    return count;
   }
 
   leave() {
@@ -47,6 +48,6 @@ export class LiquidWake {
   clear() {
     this.leave();
     this.segments.fill(0);
-    this.ages.fill(WAKE_LIFETIME);
+    this.count = 0;
   }
 }

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Water GPU regression checks</title>
+<style>body{background:#111;color:#ddd;font:14px monospace;padding:24px}button{padding:12px}canvas{display:block;margin-top:20px;max-width:100%}pre{white-space:pre-wrap}</style>
+<button id="run">Run GPU checks</button>
+<pre id="result">Ready</pre>
+<script type="module">
+import * as THREE from 'three';
+import { createWaterSurface } from '/src/WaterSurface.ts';
+import { LiquidWake } from '/src/liquidWake.ts';
+
+document.querySelector('#run').onclick = () => {
+  const result = document.querySelector('#result');
+  const renderer = new THREE.WebGLRenderer();
+  renderer.setSize(512, 512);
+  document.querySelector('canvas')?.remove();
+  document.body.append(renderer.domElement);
+  const wake = new LiquidWake();
+  const water = createWaterSurface(renderer, 1000, 1000, wake);
+  if (!water) { result.textContent = 'SKIP: float render targets unavailable'; renderer.dispose(); return; }
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  const material = new THREE.ShaderMaterial({
+    uniforms:{heightmap:{value:water.texture},visual:{value:false}},
+    vertexShader:'varying vec2 uv0;void main(){uv0=uv;gl_Position=vec4(position,1.);}',
+    fragmentShader:'uniform sampler2D heightmap;uniform bool visual;varying vec2 uv0;void main(){float h=texture2D(heightmap,uv0).r;gl_FragColor=visual?vec4(vec3(.5+h*12.),1.):vec4(h,0.,0.,1.);}',
+  });
+  const geometry = new THREE.PlaneGeometry(2,2);
+  scene.add(new THREE.Mesh(geometry,material));
+  const probe = new THREE.WebGLRenderTarget(256,256,{type:THREE.FloatType});
+  const pixels = new Float32Array(256*256*4);
+  function sample() {
+    material.uniforms.heightmap.value = water.texture;
+    renderer.setRenderTarget(probe);
+    renderer.render(scene,camera);
+    renderer.readRenderTargetPixels(probe,0,0,256,256,pixels);
+    renderer.setRenderTarget(null);
+    let energy=0, distance=0, peak=0;
+    for(let y=0;y<256;y++) for(let x=0;x<256;x++) {
+      const h=pixels[(y*256+x)*4];
+      if(!Number.isFinite(h)) throw new Error('Non-finite water height');
+      const e=h*h;
+      energy+=e;
+      distance+=e*((x/256-.5)**2+(y/256-.5)**2);
+      peak=Math.max(peak,Math.abs(h));
+    }
+    return {energy,spread:energy?Math.sqrt(distance/energy):0,peak};
+  }
+  try {
+    const calm=sample();
+    wake.move(-.08,0,0); wake.move(.08,0,32);
+    for(let i=0;i<3;i++) water.step(1/60);
+    const initial=sample();
+    for(let i=0;i<60;i++) water.step(1/60);
+    const propagated=sample();
+    material.uniforms.visual.value=true;
+    renderer.render(scene,camera);
+    material.uniforms.visual.value=false;
+    for(let i=0;i<360;i++) water.step(1/60);
+    const settled=sample();
+    water.reset();
+    const reset=sample();
+    const checks={
+      calm:calm.energy===0,
+      responds:initial.energy>0.0001,
+      propagates:propagated.spread>initial.spread*1.5,
+      persists:propagated.energy>0.0001,
+      damps:settled.energy<propagated.energy*.05,
+      stable:settled.peak<.1,
+      resets:reset.energy===0,
+    };
+    result.textContent=JSON.stringify({passed:Object.values(checks).every(Boolean),checks,initial,propagated,settled},null,2);
+  } catch(error) { result.textContent='FAIL: '+error.message; }
+  finally { water.dispose();probe.dispose();material.dispose();geometry.dispose();renderer.dispose(); }
+};
+</script>
+</html>

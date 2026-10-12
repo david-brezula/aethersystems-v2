@@ -73,7 +73,7 @@ test('project email preserves newlines and punctuation without allowing addition
 });
 
 const wakeBundle = await build({ entryPoints: ['src/liquidWake.ts'], bundle: true, write: false, platform: 'node', format: 'esm' });
-const { LiquidWake, liquidPoint, WAKE_COUNT, WAKE_LIFETIME } = await import(`data:text/javascript;base64,${Buffer.from(wakeBundle.outputFiles[0].text).toString('base64')}`);
+const { LiquidWake, liquidPoint, WAKE_COUNT } = await import(`data:text/javascript;base64,${Buffer.from(wakeBundle.outputFiles[0].text).toString('base64')}`);
 
 test('liquid pointer uses canvas bounds, scroll position and consistent aspect ratio', () => {
   const bounds = { left: 20, top: -200, width: 1200, height: 1000 };
@@ -84,19 +84,19 @@ test('liquid pointer uses canvas bounds, scroll position and consistent aspect r
   assert.equal(liquidPoint(0, 0, { left: 0, top: 0, width: 0, height: 0 }), null);
 });
 
-test('liquid wake follows motion without a click, stays bounded and dissipates', () => {
+test('liquid movement is bounded and injected only once into the water', () => {
   const wake = new LiquidWake();
   wake.move(0, 0, 0);
-  assert.ok(wake.ages.every(age => age >= WAKE_LIFETIME));
+  assert.equal(wake.consume(), 0);
   wake.move(0.1, 0.05, 32);
-  assert.equal(wake.ages[0], 0);
+  assert.equal(wake.consume(), 1);
+  assert.equal(wake.consume(), 0);
   assert.ok(Math.abs(wake.segments[2] - 0.1) < 0.00001);
   assert.ok(Math.abs(wake.segments[3] - 0.05) < 0.00001);
   for (let i = 2; i < 100; i++) wake.move(i * 0.1, i * 0.05, i * 32);
   assert.equal(wake.segments.length, WAKE_COUNT * 4);
-  assert.equal(wake.ages.length, WAKE_COUNT);
-  wake.advance(3);
-  assert.ok(wake.ages.every(age => age >= WAKE_LIFETIME));
+  assert.equal(wake.consume(), WAKE_COUNT);
+  assert.equal(wake.consume(), 0);
 });
 
 test('stationary pointers, entry, reentry, idle and jumps do not cause splashes', () => {
@@ -107,19 +107,19 @@ test('stationary pointers, entry, reentry, idle and jumps do not cause splashes'
   wake.move(2, 2, 532);
   wake.leave();
   wake.move(-1, -1, 564);
-  assert.ok(wake.ages.every(age => age >= WAKE_LIFETIME));
+  assert.equal(wake.consume(), 0);
   wake.move(-0.9, -0.9, 596);
-  assert.equal(wake.ages[0], 0);
+  assert.equal(wake.consume(), 1);
   wake.clear();
   assert.ok(wake.segments.every(value => value === 0));
-  assert.ok(wake.ages.every(age => age >= WAKE_LIFETIME));
+  assert.equal(wake.consume(), 0);
 });
 
 test('high-frequency input accumulates distance until the next wake sample', () => {
   const wake = new LiquidWake();
   wake.move(0, 0, 0);
   for (let i = 1; i <= 24; i++) wake.move(i * 0.01, 0, i);
-  assert.equal(wake.ages[0], 0);
+  assert.equal(wake.consume(), 1);
   assert.ok(Math.abs(wake.segments[2] - 0.24) < 0.00001);
-  assert.ok(wake.ages.slice(1).every(age => age >= WAKE_LIFETIME));
+  assert.equal(wake.consume(), 0);
 });
