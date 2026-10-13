@@ -22,7 +22,7 @@ export class LiquidWake {
       this.previous = { x, y, time };
       return;
     }
-    if (time - previous.time < 24) return;
+    if (time - previous.time < 16) return;
     const dx = x - previous.x;
     const dy = y - previous.y;
     this.previous = { x, y, time };

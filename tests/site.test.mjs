@@ -118,8 +118,8 @@ test('stationary pointers, entry, reentry, idle and jumps do not cause splashes'
 test('high-frequency input accumulates distance until the next wake sample', () => {
   const wake = new LiquidWake();
   wake.move(0, 0, 0);
-  for (let i = 1; i <= 24; i++) wake.move(i * 0.01, 0, i);
+  for (let i = 1; i <= 16; i++) wake.move(i * 0.01, 0, i);
   assert.equal(wake.consume(), 1);
-  assert.ok(Math.abs(wake.segments[2] - 0.24) < 0.00001);
+  assert.ok(Math.abs(wake.segments[2] - 0.16) < 0.00001);
   assert.equal(wake.consume(), 0);
 });

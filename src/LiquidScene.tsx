@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { LiquidWake, liquidPoint } from "./liquidWake";
 import { createWaterSurface } from "./WaterSurface";
 
-const fragment = `
+export const liquidFragment = `
   precision highp float;
   uniform vec2 uResolution;
   uniform float uTime;
@@ -30,30 +30,38 @@ const fragment = `
     return 130.*dot(m,g);
   }
   float field(vec2 p) {
-    float t=uTime*.075;
-    vec2 q=vec2(noise(p+vec2(t,0.)),noise(p+vec2(4.2,1.3)-t));
-    vec2 r=vec2(noise(p+1.15*q+vec2(1.7,9.2)+t*.3),noise(p+1.15*q+vec2(8.3,2.8)-t*.2));
-    return noise(p+.85*r)*.65+noise(p*1.4+q)*.1;
+    float t=uTime*.022;
+    p*=1.35;
+    // Shared transport keeps fine folds attached to the larger moving surface.
+    p+=vec2(t*.34,-t*.22);
+    vec2 q=vec2(noise(p*.8+vec2(t*.16,0.)),noise(p*.8+vec2(4.2,1.3)));
+    vec2 r=vec2(noise(p+.72*q+vec2(1.7,9.2)),noise(p+.72*q+vec2(8.3,2.8)));
+    return noise(p+.64*r)*.65+noise(p*1.4+.55*q)*.075;
   }
   void main() {
     vec2 uv=vUv;
     vec2 p=(uv-.5)*vec2(uResolution.x/uResolution.y,1.)*3.3;
+    vec2 tap=uWaterTexel*2.;
     vec2 waterSlope=vec2(
-      texture2D(uWater,uv+vec2(uWaterTexel.x,0.)).r-texture2D(uWater,uv-vec2(uWaterTexel.x,0.)).r,
-      texture2D(uWater,uv+vec2(0.,uWaterTexel.y)).r-texture2D(uWater,uv-vec2(0.,uWaterTexel.y)).r
-    )/(2.*uWaterTexel*vec2(uResolution.x/uResolution.y,1.)*3.3);
+      texture2D(uWater,uv+vec2(tap.x,0.)).r-texture2D(uWater,uv-vec2(tap.x,0.)).r,
+      texture2D(uWater,uv+vec2(0.,tap.y)).r-texture2D(uWater,uv-vec2(0.,tap.y)).r
+    )/(2.*tap*vec2(uResolution.x/uResolution.y,1.)*3.3);
     // Visible refraction follows the outward wave slope, not the cursor's drag vector.
-    p-=waterSlope*.22/(1.+length(waterSlope)*.7);
+    p-=waterSlope*.32/(1.+length(waterSlope)*1.8);
     float f=field(p);
-    float e=.008;
-    vec2 baseSlope=vec2(field(p+vec2(e,0.))-f,field(p+vec2(0.,e))-f)/e;
-    vec3 n=normalize(vec3(baseSlope+waterSlope*3.5,1.7));
-    vec3 light=normalize(vec3(-.6,.9,1.));
-    float spec=pow(max(dot(reflect(-light,n),vec3(0.,0.,1.)),0.),13.);
-    float ridge=pow(.5+.5*sin(f*12.+p.y*.7),8.);
-    float sheen=pow(max(dot(n,normalize(vec3(.4,-.6,1.))),0.),6.);
-    vec3 col=vec3(.012,.016,.020)+vec3(.095,.12,.14)*sheen;
-    col+=vec3(.13,.17,.20)*ridge+vec3(.20,.24,.27)*spec;
+    float e=.018;
+    vec2 baseSlope=vec2(
+      field(p+vec2(e,0.))-field(p-vec2(e,0.)),
+      field(p+vec2(0.,e))-field(p-vec2(0.,e))
+    )/(2.*e);
+    vec3 n=normalize(vec3(baseSlope+waterSlope*2.4,2.2));
+    vec3 reflected=reflect(vec3(0.,0.,-1.),n);
+    // Broad studio reflections give folds volume without repeated contour bands.
+    float softbox=exp(-pow((reflected.x+.32)/.58,2.)-pow((reflected.y-.45)/.85,2.));
+    float rim=exp(-pow((reflected.x-.65)/.25,2.)-pow((reflected.y+.2)/.9,2.));
+    float body=smoothstep(-.42,.55,f)*.035;
+    vec3 col=vec3(.009,.012,.016)+vec3(.11,.155,.19)*softbox;
+    col+=vec3(.055,.08,.10)*rim+vec3(.6,.75,.85)*body;
     col*=.60+.4*smoothstep(0.,.7,uv.x);
     col*=.6+.4*smoothstep(0.,.45,uv.y);
     gl_FragColor=vec4(col,1.);
@@ -79,7 +87,7 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
     } catch {
       return;
     }
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
     renderer.domElement.setAttribute("aria-hidden", "true");
     container.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
@@ -98,7 +106,7 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
       uniforms,
       vertexShader:
         "varying vec2 vUv; void main(){vUv=uv; gl_Position=vec4(position,1.);}",
-      fragmentShader: fragment,
+      fragmentShader: liquidFragment,
     });
     const geometry = new THREE.PlaneGeometry(2, 2);
     scene.add(new THREE.Mesh(geometry, material));
@@ -148,14 +156,14 @@ export default function LiquidScene({ paused }: { paused: boolean }) {
     window.addEventListener("blur", reset);
     window.addEventListener("scroll", leave, { passive: true });
     document.addEventListener("visibilitychange", reset);
-    // Limit the shader to 30 fps and suspend its work outside the viewport.
+    // Target 60 fps without doubling the workload on high-refresh displays.
     const animate = (now: number) => {
       frame = requestAnimationFrame(animate);
-      if (now - last < 32) return;
+      if (now - last < 1000 / 60 - 0.5) return;
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
       if (!visible || document.hidden || pausedRef.current) {
-        wake.leave();
+        wake.clear();
         return;
       }
       uniforms.uTime.value += dt;

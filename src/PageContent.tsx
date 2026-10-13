@@ -419,15 +419,30 @@ export function createProjectMailto(data: FormData, lang: Lang) {
 }
 
 function ProjectForm({ lang }: { lang: Lang }) {
-  const [prepared, setPrepared] = useState(false);
-  const [mail, setMail] = useState("");
+  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const requestId = useRef("");
+  const sending = useRef(false);
   const form = useRef<HTMLFormElement>(null);
-  const submit = (e: FormEvent<HTMLFormElement>) => {
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const url = createProjectMailto(new FormData(e.currentTarget), lang);
-    setMail(url);
-    setPrepared(true);
-    window.location.href = url;
+    if (sending.current) return;
+    sending.current = true;
+    setStatus("sending");
+    const data = Object.fromEntries(new FormData(e.currentTarget));
+    requestId.current ||= crypto.randomUUID();
+    try {
+      const response = await fetch("/api/contact", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...data, requestId: requestId.current }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const result = await response.json();
+      if (!response.ok || result.success !== true) throw new Error("delivery_failed");
+      setStatus("sent");
+      form.current?.reset();
+      requestId.current = "";
+    } catch { setStatus("error"); }
+    finally { sending.current = false; }
   };
   return (
     <div className="project-brief">
@@ -440,13 +455,17 @@ function ProjectForm({ lang }: { lang: Lang }) {
         <p>
           {choose(
             lang,
-            "Opíšte svoj cieľ, dôležité obmedzenia a predstavu o termíne. Správu dokončíte a odošlete vo svojom e-mailovom klientovi.",
-            "Describe your goal, important constraints and timeline. You will finish and send the message in your email client.",
+            "Opíšte svoj cieľ, dôležité obmedzenia a predstavu o termíne.",
+            "Describe your goal, important constraints and timeline.",
           )}
         </p>
         <a href="mailto:info@aethersystems.tech">info@aethersystems.tech</a>
       </div>
-      <form ref={form} onSubmit={submit}>
+      <form ref={form} onSubmit={submit} aria-busy={status === "sending"} onChange={() => { if (status !== "sending") setStatus("idle"); }}>
+        <div className="form-trap" aria-hidden="true">
+          <label>Website<input name="website" tabIndex={-1} autoComplete="off" /></label>
+        </div>
+        <fieldset disabled={status === "sending"} className="form-fields">
         <div className="form-pair">
           <label>
             {choose(lang, "Meno a priezvisko", "Full name")}
@@ -492,19 +511,20 @@ function ProjectForm({ lang }: { lang: Lang }) {
           <textarea name="message" required rows={5} maxLength={3000} />
         </label>
         <button className="button outline" type="submit">
-          {choose(lang, "Pokračovať v e-maile", "Continue in email")}
+          {status === "sending" ? choose(lang, "Odosielam…", "Sending…") : choose(lang, "Odoslať správu", "Send message")}
           <Send size={16} />
         </button>
-        {prepared && (
+        </fieldset>
+        {status === "sent" && (
           <p role="status" className="form-status">
             {choose(
               lang,
-              "Správa je pripravená v e-mailovom klientovi.",
-              "Your message is ready in your email client.",
-            )}{" "}
-            <a href={mail}>{choose(lang, "Otvoriť znova", "Open again")}</a>
+              "Ďakujeme. Vaša správa bola odoslaná.",
+              "Thank you. Your message has been sent.",
+            )}
           </p>
         )}
+        {status === "error" && <p role="alert" className="form-status form-error">{choose(lang, "Správu sa nepodarilo odoslať. Skúste to znova alebo nám napíšte na", "Your message could not be sent. Try again or email us at")} <a href="mailto:info@aethersystems.tech">info@aethersystems.tech</a>.</p>}
         <a href="/privacy" className="form-privacy">
           {choose(lang, "Informácie o súkromí", "Privacy information")}
         </a>

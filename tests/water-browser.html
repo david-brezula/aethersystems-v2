@@ -9,8 +9,11 @@
 import * as THREE from 'three';
 import { createWaterSurface } from '/src/WaterSurface.ts';
 import { LiquidWake } from '/src/liquidWake.ts';
+import { liquidFragment } from '/src/LiquidScene.tsx';
 
-document.querySelector('#run').onclick = () => {
+document.querySelector('#run').onclick = async () => {
+  const button = document.querySelector('#run');
+  button.disabled = true;
   const result = document.querySelector('#result');
   const renderer = new THREE.WebGLRenderer();
   renderer.setSize(512, 512);
@@ -18,7 +21,7 @@ document.querySelector('#run').onclick = () => {
   document.body.append(renderer.domElement);
   const wake = new LiquidWake();
   const water = createWaterSurface(renderer, 1000, 1000, wake);
-  if (!water) { result.textContent = 'SKIP: float render targets unavailable'; renderer.dispose(); return; }
+  if (!water) { result.textContent = 'SKIP: float render targets unavailable'; renderer.dispose(); button.disabled=false; return; }
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
   const material = new THREE.ShaderMaterial({
@@ -27,7 +30,33 @@ document.querySelector('#run').onclick = () => {
     fragmentShader:'uniform sampler2D heightmap;uniform bool visual;varying vec2 uv0;void main(){float h=texture2D(heightmap,uv0).r;gl_FragColor=visual?vec4(vec3(.5+h*12.),1.):vec4(h,0.,0.,1.);}',
   });
   const geometry = new THREE.PlaneGeometry(2,2);
-  scene.add(new THREE.Mesh(geometry,material));
+  const mesh = new THREE.Mesh(geometry,material);
+  scene.add(mesh);
+  const renderWidth=Math.min(innerWidth,1440);
+  const renderHeight=innerWidth<600?1329:1585;
+  const surface = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:{value:18}, uResolution:{value:new THREE.Vector2(renderWidth,renderHeight)},
+      uWater:{value:water.texture}, uWaterTexel:{value:water.texel},
+    },
+    vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position,1.);}',
+    fragmentShader:liquidFragment,
+  });
+  const colorProbe = new THREE.WebGLRenderTarget(256,256);
+  function colorSample() {
+    surface.uniforms.uWater.value=water.texture;
+    renderer.setRenderTarget(colorProbe);
+    renderer.render(scene,camera);
+    const colors=new Uint8Array(256*256*4);
+    renderer.readRenderTargetPixels(colorProbe,0,0,256,256,colors);
+    renderer.setRenderTarget(null);
+    return colors;
+  }
+  function changed(a,b) {
+    let count=0;
+    for(let i=0;i<a.length;i+=4) if(Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2])>3) count++;
+    return count;
+  }
   const probe = new THREE.WebGLRenderTarget(256,256,{type:THREE.FloatType});
   const pixels = new Float32Array(256*256*4);
   function sample() {
@@ -70,9 +99,35 @@ document.querySelector('#run').onclick = () => {
       stable:settled.peak<.1,
       resets:reset.energy===0,
     };
-    result.textContent=JSON.stringify({passed:Object.values(checks).every(Boolean),checks,initial,propagated,settled},null,2);
+    mesh.material=surface;
+    const still=colorSample();
+    checks.nonblank=still.some((value,index)=>index%4!==3 && value>15);
+    checks.deterministic=changed(still,colorSample())===0;
+    surface.uniforms.uTime.value+=1;
+    checks.idleMoves=changed(still,colorSample())>500;
+    surface.uniforms.uTime.value=18;
+    wake.clear(); wake.move(-.08,0,0); wake.move(.08,0,32);
+    for(let i=0;i<5;i++) water.step(1/60);
+    checks.visibleWake=changed(still,colorSample())>50;
+    renderer.setSize(renderWidth,renderHeight);
+    const intervals=[];
+    let previous=0;
+    result.textContent='Measuring 120 frames of the production shader...';
+    for(let i=0;i<120;i++) {
+      const now=await new Promise(requestAnimationFrame);
+      if(i>10) intervals.push(now-previous);
+      previous=now;
+      water.step(1/60);
+      surface.uniforms.uTime.value+=1/60;
+      surface.uniforms.uWater.value=water.texture;
+      renderer.render(scene,camera);
+      renderer.getContext().finish();
+    }
+    intervals.sort((a,b)=>a-b);
+    const frameMs={median:intervals[Math.floor(intervals.length*.5)],p95:intervals[Math.floor(intervals.length*.95)]};
+    result.textContent=JSON.stringify({passed:Object.values(checks).every(Boolean),checks,renderWidth,renderHeight,frameMs,initial,propagated,settled},null,2);
   } catch(error) { result.textContent='FAIL: '+error.message; }
-  finally { water.dispose();probe.dispose();material.dispose();geometry.dispose();renderer.dispose(); }
+  finally { water.dispose();probe.dispose();colorProbe.dispose();surface.dispose();material.dispose();geometry.dispose();renderer.dispose();button.disabled=false; }
 };
 </script>
 </html>

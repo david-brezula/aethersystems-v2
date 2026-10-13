@@ -16,16 +16,21 @@ const waterStep = `
       +texture2D(heightmap,uv-vec2(texel.x,0.)).r
       +texture2D(heightmap,uv+vec2(0.,texel.y)).r
       +texture2D(heightmap,uv-vec2(0.,texel.y)).r;
-    float height=state.x+(state.x-state.y)*.978+.24*(neighbors-4.*state.x);
+    float height=state.x+(state.x-state.y)*.965+.22*(neighbors-4.*state.x);
     vec2 p=(uv-.5)*uWorld;
     for(int i=0;i<${WAKE_COUNT};i++) {
       if(i>=uStrokeCount) break;
       vec2 stroke=uStrokes[i].zw;
       float along=clamp(dot(p-uStrokes[i].xy,stroke)/max(dot(stroke,stroke),.000001),0.,1.);
       vec2 offset=p-uStrokes[i].xy-stroke*along;
-      float d2=dot(offset,offset)/(uRadius*uRadius);
-      // A depression and raised rim displace water without adding a lasting volume.
-      height+=(d2-1.)*exp(-d2)*.007*min(length(stroke)/.035,2.);
+      vec2 direction=normalize(stroke);
+      float lateral=dot(offset,vec2(-direction.y,direction.x))/uRadius;
+      float forward=dot(offset,direction)/uRadius;
+      float d2=lateral*lateral+forward*forward;
+      // Side ridges and a bow displace the same surface; no separate ripple overlay.
+      float shoulders=(2.*lateral*lateral-1.)*exp(-d2);
+      float bow=forward*exp(-d2)*.55;
+      height+=(shoulders+bow)*.0045*min(length(stroke)/.025,2.5);
     }
     vec2 edge=min(uv,1.-uv)*resolution;
     float absorb=mix(.85,1.,smoothstep(0.,10.,min(edge.x,edge.y)));
@@ -51,7 +56,7 @@ export function createWaterSurface(
   compute.setVariableDependencies(water, [water]);
   const uniforms = water.material.uniforms;
   uniforms.uWorld = { value: new THREE.Vector2((width / height) * 3.3, 3.3) };
-  uniforms.uRadius = { value: (26 / height) * 3.3 };
+  uniforms.uRadius = { value: (44 / height) * 3.3 };
   uniforms.uStrokes = { value: wake.segments };
   uniforms.uStrokeCount = { value: 0 };
   if (compute.init()) {
