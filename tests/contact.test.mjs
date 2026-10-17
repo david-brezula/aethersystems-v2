@@ -1,9 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 const bundle = await build({entryPoints:['server/contact.ts'],bundle:true,write:false,platform:'node',format:'esm'});
 const {createContactHandler} = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 const valid = {name:'Test Person',email:'test@example.com',company:'A&B',scale:'MVP / New product',message:'Line 1\n<img src=x> & line 2',requestId:'a2e47862-572c-4b0a-9335-93fc8959a118',website:''};
+test('Vercel entry point loads as unbundled Node ESM', async()=>{
+  const directory=await mkdtemp(path.join(tmpdir(),'aether-api-test-'));
+  try {
+    await writeFile(path.join(directory,'package.json'),'{"type":"module"}');
+    await build({entryPoints:['api/contact.ts','server/contact.ts'],outbase:'.',outdir:directory,bundle:false,platform:'node',format:'esm'});
+    const {default:api}=await import(pathToFileURL(path.join(directory,'api/contact.js')).href);
+    const response=await api.fetch(new Request('https://www.aethersystems.tech/api/contact'));
+    assert.equal(response.status,405);
+    assert.equal(response.headers.get('allow'),'POST');
+  } finally {
+    if(path.dirname(directory)===path.resolve(tmpdir()) && path.basename(directory).startsWith('aether-api-test-')) await rm(directory,{recursive:true,force:true});
+  }
+});
 function request(data=valid,headers={}) {
   return new Request('https://www.aethersystems.tech/api/contact',{method:'POST',headers:{origin:'https://www.aethersystems.tech','content-type':'application/json',...headers},body:typeof data==='string'?data:JSON.stringify(data)});
 }
